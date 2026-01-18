@@ -114,20 +114,24 @@ class HamperLinkApp:
         asyncio.create_task(self.connect_quic(ip))
 
     async def connect_quic(self, ip):
-        client = QuicClient(cfg.CERT_PATH, dashboard=self.dashboard)
-        self.quic_client = client
-        
-        def on_client_msg(data, _):
-            self.dashboard.add_log("PEER", data)
-        
-        def on_connected():
-            self.dashboard.update_peer("CONNECTED", ip, name=self.peer_info.get('hostname'))
-            self.dashboard.add_log("SYSTEM", "QUIC Link Established!")
+        self.dashboard.add_debug(f"Starting QUIC to {ip}")
+        try:
+            client = QuicClient(cfg.CERT_PATH, dashboard=self.dashboard)
+            self.quic_client = client
             
-        self.dashboard.add_log("SYSTEM", f"Connecting to {ip}...")
-        
-        # This runs in background, the callback fires when connected
-        await client.connect_to(ip, cfg.DEFAULT_PORT, on_client_msg, on_connected)
+            def on_client_msg(data, _):
+                self.dashboard.add_log("PEER", data)
+            
+            def on_connected():
+                self.dashboard.update_peer("CONNECTED", ip, name=self.peer_info.get('hostname'))
+                self.dashboard.add_log("SYSTEM", "QUIC Link Established!")
+                
+            self.dashboard.add_log("SYSTEM", f"Connecting to {ip}...")
+            
+            # This runs in background, the callback fires when connected
+            await client.connect_to(ip, cfg.DEFAULT_PORT, on_client_msg, on_connected)
+        except Exception as e:
+            self.dashboard.add_debug(f"QUIC Error: {e}")
 
     async def handle_input(self, msg):
         self.dashboard.add_log("ME", msg)
