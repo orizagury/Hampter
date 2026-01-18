@@ -17,6 +17,7 @@ class Dashboard:
         self.console = Console()
         self.layout = Layout()
         self.messages = deque(maxlen=20)
+        self.debug_log = deque(maxlen=10) # New Debug Log
         self.peer_data = {"status": "SEARCHING", "ip": "N/A", "ping": "N/A", "name": "N/A"}
         self.my_info = {"iface": "Unknown", "ip": "Unknown"}
         self.input_buffer = ""
@@ -28,8 +29,13 @@ class Dashboard:
             Layout(name="footer", size=3)
         )
         self.layout["main"].split_row(
-            Layout(name="status", ratio=1),
-            Layout(name="log", ratio=2)
+            Layout(name="status", ratio=2),
+            Layout(name="log", ratio=3)
+        )
+        # Split log into Data and Debug
+        self.layout["log"].split_column(
+            Layout(name="data_log", ratio=3),
+            Layout(name="debug_log", ratio=1)
         )
 
     def update_peer(self, status, ip="N/A", ping="N/A", name="N/A"):
@@ -42,13 +48,17 @@ class Dashboard:
         timestamp = datetime.now().strftime("%H:%M:%S")
         self.messages.append(f"[{timestamp}] [bold]{sender}[/bold]: {message}")
 
+    def add_debug(self, message):
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        self.debug_log.append(f"[{timestamp}] {message}")
+
     def update_input(self, text):
         self.input_buffer = text
 
     def generate_layout(self):
         # Header
         self.layout["header"].update(
-            Panel(Text("HAMPTER LINK PROTOTYPE v1.5", justify="center", style="bold magenta"), style="on black")
+            Panel(Text("HAMPTER LINK PROTOTYPE v1.6 (DEBUG MODE)", justify="center", style="bold magenta"), style="on black")
         )
         
         # Status Panel
@@ -70,14 +80,19 @@ class Dashboard:
             Panel(status_table, title="SYSTEM STATUS", border_style="cyan")
         )
         
-        # Log Panel
+        # Data Log Panel
         log_text = "\n".join(self.messages)
-        self.layout["log"].update(
-            Panel(log_text, title="DATA LINK LOG", border_style="green", padding=(1, 2))
+        self.layout["data_log"].update(
+            Panel(log_text, title="DATA LINK LOG", border_style="green", padding=(0, 1))
+        )
+
+        # Debug Log Panel
+        debug_text = "\n".join(self.debug_log)
+        self.layout["debug_log"].update(
+            Panel(debug_text, title="DEBUG TELEMETRY", border_style="yellow", style="dim")
         )
         
         # Footer (Input)
-        # Add visual cursor
         cursor = "█" 
         self.layout["footer"].update(
              Panel(Text(f"> {self.input_buffer}{cursor}", style="bold white"), title="COMMAND INPUT", border_style="dim")
@@ -86,6 +101,4 @@ class Dashboard:
         return self.layout
 
     def get_live(self):
-        # Using auto_refresh=False to manually control updates from main loop if needed, 
-        # but here we rely on the main loop calling update.
         return Live(self.generate_layout(), refresh_per_second=10, screen=True)

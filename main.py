@@ -95,7 +95,7 @@ class HamperLinkApp:
         )
         
         # Start Discovery
-        discovery = DiscoveryService(self.on_peer_found)
+        discovery = DiscoveryService(self.on_peer_found, dashboard=self.dashboard)
         await discovery.start()
         
         # Start TUI Loop
