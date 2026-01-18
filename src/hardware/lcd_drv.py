@@ -4,31 +4,22 @@ Controls external SparkFun LCD display via I2C.
 """
 import asyncio
 import logging
-from typing import List
+from typing import List, Optional
 
 logger = logging.getLogger("LCD")
+
+# Track mock mode
+MOCK_I2C = False
+_smbus_error = None
 
 # Try to import I2C library
 try:
     from smbus2 import SMBus
-    MOCK_I2C = False
-except ImportError:
+except ImportError as e:
     MOCK_I2C = True
+    _smbus_error = str(e)
     logger.warning("SMBus2 not found. Using Mock LCD.")
-    
-    class SMBus:
-        """Mock SMBus for development environments."""
-        def __init__(self, bus: int):
-            pass
-        
-        def write_byte_data(self, addr: int, cmd: int, val: int):
-            pass
-        
-        def write_i2c_block_data(self, addr: int, cmd: int, vals: list):
-            pass
-        
-        def close(self):
-            pass
+    SMBus = None
 
 
 class LCDDriver:
@@ -36,28 +27,54 @@ class LCDDriver:
     I2C LCD Display Driver for 16x2 character displays.
     
     Supports scrolling status messages and direct text output.
+    Gracefully degrades to mock mode if I2C is unavailable.
     
     Attributes:
         address: I2C address of the LCD (typically 0x27 or 0x3F)
         bus_id: I2C bus number (typically 1 on Raspberry Pi)
+        enabled: Whether LCD hardware is enabled
     """
     
     LCD_WIDTH = 16
     MAX_MESSAGES = 5
     SCROLL_DELAY = 3.0  # Seconds between message changes
     
-    def __init__(self, address: int = 0x27, bus_id: int = 1):
+    def __init__(self, address: int = 0x27, bus_id: int = 1, enabled: bool = True):
         self.address = address
         self.bus_id = bus_id
         self.messages: List[str] = ["Hampter Link"]
         self.msg_idx = 0
         self.running = False
+        self.enabled = enabled
+        self.bus: Optional[object] = None
+        self._mock_mode = MOCK_I2C or not enabled
         
-        self.bus = SMBus(bus_id)
+        if not enabled:
+            logger.info("LCD disabled by configuration.")
+            return
+        
+        if MOCK_I2C:
+            logger.warning(f"LCD mock mode: {_smbus_error}")
+            return
+        
+        # Try to open the I2C bus
+        try:
+            self.bus = SMBus(bus_id)
+            logger.info(f"LCD initialized on I2C bus {bus_id}, address 0x{address:02X}")
+        except PermissionError as e:
+            self._mock_mode = True
+            logger.warning(f"LCD permission denied: {e}. Using mock mode.")
+            logger.warning("Fix: sudo usermod -aG dialout $USER (then re-login)")
+        except FileNotFoundError as e:
+            self._mock_mode = True
+            logger.warning(f"I2C bus not found: {e}. Using mock mode.")
+        except Exception as e:
+            self._mock_mode = True
+            logger.warning(f"LCD init error: {e}. Using mock mode.")
 
     def init_display(self):
         """Initialize the LCD display with default settings."""
-        if MOCK_I2C:
+        if self._mock_mode:
             return
             
         try:
@@ -70,16 +87,19 @@ class LCDDriver:
             self._send_command(0x01)  # Clear display
             asyncio.sleep(0.002)  # Wait for clear command
             
-            logger.info("LCD initialized.")
+            logger.debug("LCD display initialized.")
         except Exception as e:
             logger.error(f"LCD init failed: {e}")
+            self._mock_mode = True
 
     async def start_scroller(self):
         """Start the message scrolling loop."""
         self.running = True
-        self.init_display()
         
-        logger.info("LCD scroller started.")
+        if not self._mock_mode:
+            self.init_display()
+        
+        logger.info("LCD scroller started." + (" (mock)" if self._mock_mode else ""))
         
         while self.running:
             try:
@@ -97,10 +117,11 @@ class LCDDriver:
         self.running = False
         self.clear()
         
-        try:
-            self.bus.close()
-        except Exception:
-            pass
+        if self.bus:
+            try:
+                self.bus.close()
+            except Exception:
+                pass
         
         logger.info("LCD stopped.")
 
@@ -129,7 +150,7 @@ class LCDDriver:
             text: Text to display
             line: Line number (0 or 1)
         """
-        if MOCK_I2C:
+        if self._mock_mode:
             return
 
         try:
@@ -148,7 +169,7 @@ class LCDDriver:
 
     def clear(self):
         """Clear the LCD display."""
-        if MOCK_I2C:
+        if self._mock_mode:
             return
             
         try:
@@ -158,8 +179,10 @@ class LCDDriver:
 
     def _send_command(self, cmd: int):
         """Send a command byte to the LCD."""
-        self.bus.write_byte_data(self.address, 0x00, cmd)
+        if self.bus:
+            self.bus.write_byte_data(self.address, 0x00, cmd)
 
     def _send_data(self, data: int):
         """Send a data byte to the LCD."""
-        self.bus.write_byte_data(self.address, 0x40, data)
+        if self.bus:
+            self.bus.write_byte_data(self.address, 0x40, data)
