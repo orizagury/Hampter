@@ -85,14 +85,20 @@ class HamperLinkApp:
         quic_config = build_quic_config(cfg.CERT_PATH, cfg.KEY_PATH)
         
         def on_server_msg(data, peer):
-            ip = peer[0] if (peer and len(peer) > 0) else "Peer"
-            self.dashboard.add_log(f"PEER({ip})", data)
-            self.dashboard.add_debug(f"SRV: RX Data from {ip}")
+            try:
+                ip = peer[0] if (peer and len(peer) > 0) else "Peer"
+                self.dashboard.add_log(f"PEER({ip})", data)
+                self.dashboard.add_debug(f"SRV: RX Data from {ip}")
+            except Exception as e:
+                logger.error(f"on_server_msg Error: {e}")
         
         def on_server_connect(peer):
-            ip = peer[0] if (peer and len(peer) > 0) else "Unknown"
-            self.dashboard.add_debug(f"SRV: New Conn from {ip}")
-            self.dashboard.update_peer("CONNECTED", ip)
+            try:
+                ip = peer[0] if (peer and len(peer) > 0) else "Unknown"
+                self.dashboard.add_debug(f"SRV: New Conn from {ip}")
+                self.dashboard.update_peer("CONNECTED", ip)
+            except Exception as e:
+                logger.error(f"on_server_connect Error: {e}")
         
         # Inject callbacks into Protocol class (Hack for aioquic architecture)
         HampterProtocol._on_message_callback = on_server_msg
@@ -116,9 +122,11 @@ class HamperLinkApp:
         await self.tui_loop()
 
     def on_peer_found(self, info, ip):
-        # Allow reconnecting if status isn't CONNECTED
-        if self.peer_info and self.peer_info['ip'] == ip and self.quic_client and self.quic_client.connected:
-            return 
+        # Prevent connection storm: Skip if already connected or connecting to this IP
+        if self.quic_client:
+            if self.quic_client.connected or getattr(self.quic_client, 'connecting', False):
+                if getattr(self.quic_client, 'target_ip', None) == ip:
+                    return 
             
         self.peer_info = info
         self.peer_info['ip'] = ip
@@ -138,9 +146,12 @@ class HamperLinkApp:
                 self.dashboard.add_log("PEER", data)
             
             def on_connected():
-                self.dashboard.update_peer("CONNECTED", ip, name=self.peer_info.get('hostname'))
-                self.dashboard.add_log("SYSTEM", f"Link to {ip} Up!")
-                self.dashboard.add_debug(f"CLI: Connected to {ip}")
+                try:
+                    self.dashboard.update_peer("CONNECTED", ip, name=self.peer_info.get('hostname'))
+                    self.dashboard.add_log("SYSTEM", f"Link to {ip} Up!")
+                    self.dashboard.add_debug(f"CLI: Connected to {ip}")
+                except Exception as e:
+                    logger.error(f"on_connected Error: {e}")
                 
             self.dashboard.add_log("SYSTEM", f"Connecting to {ip}...")
             await client.connect_to(ip, cfg.DEFAULT_PORT, on_client_msg, on_connected)
@@ -166,18 +177,23 @@ class HamperLinkApp:
             tty.setcbreak(fd)
             with self.dashboard.get_live() as live:
                 while self.running:
-                    live.update(self.dashboard.generate_layout())
-                    if select.select([sys.stdin], [], [], 0)[0]:
-                        ch = sys.stdin.read(1)
-                        if ch == '\x03': self.running = False; break
-                        elif ch in ('\n', '\r'):
-                            if self.input_buffer.strip():
-                                await self.handle_input(self.input_buffer)
-                                self.input_buffer = ""
-                        elif ch == '\x7f': self.input_buffer = self.input_buffer[:-1]
-                        elif ch.isprintable(): self.input_buffer += ch
-                        self.dashboard.update_input(self.input_buffer)
+                    try:
+                        live.update(self.dashboard.generate_layout())
+                        if select.select([sys.stdin], [], [], 0)[0]:
+                            ch = sys.stdin.read(1)
+                            if ch == '\x03': self.running = False; break
+                            elif ch in ('\n', '\r'):
+                                if self.input_buffer.strip():
+                                    await self.handle_input(self.input_buffer)
+                                    self.input_buffer = ""
+                            elif ch == '\x7f': self.input_buffer = self.input_buffer[:-1]
+                            elif ch.isprintable(): self.input_buffer += ch
+                            self.dashboard.update_input(self.input_buffer)
+                    except Exception as e:
+                        logger.error(f"TUI Loop Error: {e}")
                     await asyncio.sleep(0.01)
+        except Exception as fatal_e:
+            logger.error(f"TUI Fatal: {fatal_e}\n{traceback.format_exc()}")
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 

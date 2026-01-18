@@ -25,8 +25,9 @@ class HampterProtocol(QuicConnectionProtocol):
                 # Try multiple ways to get peer info
                 peer = self._transport.get_extra_info('peername')
                 if not peer:
-                    # Some versions/platforms might use 'addr'
                     peer = self._transport.get_extra_info('addr')
+                if not peer:
+                    peer = getattr(self._transport, '_address', None)
                 
                 HampterProtocol._on_connect_callback(peer or ("Unknown", 0))
                 

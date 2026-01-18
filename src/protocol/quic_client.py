@@ -41,6 +41,8 @@ class QuicClient:
         
         self.protocol = None
         self.connected = False
+        self.connecting = False
+        self.target_ip = None
         self.chat_stream_id = 4
         self.heartbeat_stream_id = 0
         self.dashboard = dashboard
@@ -49,6 +51,8 @@ class QuicClient:
         if self.dashboard:
             self.dashboard.add_debug(f"CLI: Connecting to {ip}:{port}")
         
+        self.connecting = True
+        self.target_ip = ip
         try:
             # We use a short timeout for the connection attempt
             async with connect(
@@ -85,9 +89,9 @@ class QuicClient:
             if self.dashboard:
                 self.dashboard.add_debug(f"CLI Fail: {type(e).__name__}")
                 logger.error(f"QUIC Connection Fail: {e}")
-            self.connected = False
         finally:
             self.connected = False
+            self.connecting = False
 
     def send_message(self, message: str):
         if self.connected and self.protocol:
