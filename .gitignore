@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+
+# Certificates (Security Risk to commit!)
+certs/*.pem
+certs/*.key
+certs/*.crt
+!certs/.gitkeep
+
+# Project Config (Contains Secrets/Keys)
+config.json
+
+# IDEs
+.vscode/
+.idea/
+.DS_Store
+
+# Logs
+*.log

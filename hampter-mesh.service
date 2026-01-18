@@ -1,0 +1,33 @@
+[Unit]
+Description=Hampter Link Mesh Network (802.11s)
+After=network.target
+Wants=network.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Modify 'wlan0' if your interface name is different (e.g., wlp3s0)
+Environment=IFACE=wlan0
+Environment=IP=192.168.100.1/24
+
+# Phase 1: Bring interface down to configure
+ExecStartPre=/sbin/ip link set dev ${IFACE} down
+
+# Phase 2: Set regulatory domain to allow 6GHz (US/DE/etc depending on region, US usually allows)
+ExecStartPre=/sbin/iw reg set US
+
+# Phase 3: Set mode to Mesh (802.11s)
+# Note: In real world usage, channel 37 (5GHz) or specific 6GHz block channel should be used.
+# Fallback to standard 2.4GHz channel 1 for initial testing if 6GHz fails.
+ExecStart=/sbin/iw dev ${IFACE} set type mp
+ExecStart=/sbin/ip link set dev ${IFACE} up
+ExecStart=/sbin/iw dev ${IFACE} mesh join hampter-mesh freq 2412
+ExecStart=/sbin/ip address add ${IP} dev ${IFACE}
+
+# Clean up on stop
+ExecStop=/sbin/ip link set dev ${IFACE} down
+ExecStop=/sbin/iw dev ${IFACE} set type managed
+ExecStop=/sbin/ip link set dev ${IFACE} up
+
+[Install]
+WantedBy=multi-user.target

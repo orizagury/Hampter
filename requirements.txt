@@ -1,0 +1,8 @@
+aioquic==0.9.20
+PyQt6==6.5.0
+cryptography==41.0.0
+gpiozero==2.0
+smbus2==0.4.2
+psutil==5.9.5
+PyGObject==3.44.0
+qasync==0.27.1
