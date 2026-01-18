@@ -73,6 +73,8 @@ class HamperLinkApp:
         except KeyboardInterrupt:
             pass
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             print(f"Fatal Error: {e}")
         finally:
             print("Shutting down...")
