@@ -7,37 +7,40 @@ import logging
 from typing import Dict, Callable, Optional
 from aioquic.asyncio import QuicConnectionProtocol
 from aioquic.quic.configuration import QuicConfiguration
-from aioquic.quic.events import StreamDataReceived, HandshakeCompleted
+from aioquic.quic.events import StreamDataReceived, HandshakeCompleted, ConnectionTerminated
 
 logger = logging.getLogger("QuicServer")
 
 class HampterProtocol(QuicConnectionProtocol):
+    _on_message_callback: Optional[Callable] = None
+    _on_connect_callback: Optional[Callable] = None
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._on_message_callback: Optional[Callable] = None
-
-    def connection_made(self, transport):
-        super().connection_made(transport)
-        logger.info("QUIC Connection Made")
 
     def quic_event_received(self, event):
-        if isinstance(event, StreamDataReceived):
-            data = event.data.decode('utf-8')
-            stream_id = event.stream_id
-            
-            if stream_id == 0:
-                # Heartbeat (Ping/Pong) - Client Stream 0
-                pass
-            elif stream_id == 4:
-                # Chat Data - Client Stream 4
-                if self._on_message_callback:
-                    self._on_message_callback(data, self._transport.get_extra_info('peername'))
-            else:
-                 # Handle generic streams if any
-                 pass
-        
-        elif isinstance(event, HandshakeCompleted):
-            logger.info("QUIC Handshake Completed")
+        if isinstance(event, HandshakeCompleted):
+            logger.info("SRV: Handshake Completed")
+            if self._on_connect_callback:
+                peer = self._transport.get_extra_info('peername')
+                self._on_connect_callback(peer)
+                
+        elif isinstance(event, StreamDataReceived):
+            try:
+                data = event.data.decode('utf-8')
+                stream_id = event.stream_id
+                
+                if stream_id == 0:
+                    # Heartbeat
+                    pass
+                elif stream_id == 4:
+                    if self._on_message_callback:
+                        self._on_message_callback(data, self._transport.get_extra_info('peername'))
+            except Exception as e:
+                logger.error(f"SRV Decode error: {e}")
+                
+        elif isinstance(event, ConnectionTerminated):
+            logger.info("SRV: Connection Terminated")
 
 def build_quic_config(cert_path, key_path):
     configuration = QuicConfiguration(is_client=False)

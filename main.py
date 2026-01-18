@@ -9,6 +9,8 @@ import sys
 import tty
 import termios
 import select
+import traceback
+from aioquic.asyncio import serve
 
 # Core Modules
 from config import cfg
@@ -19,28 +21,25 @@ from src.protocol.quic_server import HampterProtocol, build_quic_config
 from src.protocol.quic_client import QuicClient
 from src.ui.dashboard import Dashboard
 
-from aioquic.asyncio import serve
-
-# Logging: Write to file for debugging
+# Logging: Redirect all logs to a file to keep TUI clean
 logging.basicConfig(
-    filename='hampter_debug.log', 
+    filename='hampter_debug.log',
     level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s %(name)s %(levelname)s: %(message)s'
 )
 logger = logging.getLogger("Main")
 
 class HamperLinkApp:
     def __init__(self):
         self.dashboard = Dashboard()
-        self.loop = None
+        self.loop = asyncio.new_event_loop()
         self.quic_client = None
         self.peer_info = None
         self.running = True
         self.input_buffer = ""
-        self.connecting = False  # Prevent duplicate connections
         
     def start(self):
-        # 1. Interface Selection (Standard Print Mode before TUI)
+        # 1. Interface Selection
         try:
             ifaces = InterfaceManager.scan_interfaces()
             print("\n[+] Available Interfaces:")
@@ -48,10 +47,7 @@ class HamperLinkApp:
                 print(f" {idx}. {i['name']} ({i['driver']}) {'[AX210]' if i['is_ax210'] else ''}")
             
             sel = input("\nSelect Interface ID (default 0): ") or "0"
-            if int(sel) < len(ifaces):
-                selected_iface = ifaces[int(sel)]
-            else:
-                selected_iface = ifaces[0]
+            selected_iface = ifaces[int(sel)]
             
             # 2. Network Config
             ip = input(f"Enter IP for {selected_iface['name']} (e.g. 10.0.0.1): ")
@@ -69,32 +65,36 @@ class HamperLinkApp:
             # 3. Certs
             CertificateManager.ensure_certs()
             
-            # 4. Asyncio Loop Start
-            self.loop = asyncio.new_event_loop()
+            # 4. Asyncio Loop
             asyncio.set_event_loop(self.loop)
             self.loop.run_until_complete(self.async_main())
             
         except KeyboardInterrupt:
             pass
         except Exception as e:
-            import traceback
             traceback.print_exc()
             print(f"Fatal Error: {e}")
         finally:
+            self.running = False
             print("Shutting down...")
 
     async def async_main(self):
-        logger.info("Starting async_main")
-        self.dashboard.add_debug("Init: Starting servers...")
+        self.dashboard.add_debug("SYSTEM: Starting Core...")
         
         # Start QUIC Server
         quic_config = build_quic_config(cfg.CERT_PATH, cfg.KEY_PATH)
         
         def on_server_msg(data, peer):
-            self.dashboard.add_log("PEER", data)
-            logger.info(f"Server received: {data} from {peer}")
+            self.dashboard.add_log(f"PEER", data)
+            self.dashboard.add_debug(f"SRV: RX Data from {peer}")
         
+        def on_server_connect(peer):
+            self.dashboard.add_debug(f"SRV: New Connection from {peer}")
+            self.dashboard.update_peer("CONNECTED", peer[0])
+        
+        # Inject callbacks into Protocol class (Hack for aioquic architecture)
         HampterProtocol._on_message_callback = on_server_msg
+        HampterProtocol._on_connect_callback = on_server_connect
 
         try:
             server = await serve(
@@ -102,13 +102,10 @@ class HamperLinkApp:
                 configuration=quic_config,
                 create_protocol=HampterProtocol,
             )
-            self.dashboard.add_debug(f"QUIC Server on :{cfg.DEFAULT_PORT}")
-            logger.info(f"QUIC Server started on port {cfg.DEFAULT_PORT}")
+            self.dashboard.add_debug(f"SRV: Listening on {cfg.DEFAULT_PORT}")
         except Exception as e:
-            self.dashboard.add_debug(f"Server Error: {e}")
-            logger.error(f"Server failed: {e}")
-            return
-        
+            self.dashboard.add_debug(f"SRV Error: {e}")
+
         # Start Discovery
         discovery = DiscoveryService(self.on_peer_found, dashboard=self.dashboard)
         await discovery.start()
@@ -117,97 +114,68 @@ class HamperLinkApp:
         await self.tui_loop()
 
     def on_peer_found(self, info, ip):
-        """Called from sync context when a peer is discovered."""
-        logger.info(f"Peer found callback: {ip}")
-        
-        # Prevent duplicate connection attempts
-        if self.connecting:
-            logger.debug("Already connecting, skipping")
-            return
-        if self.peer_info and self.peer_info.get('ip') == ip:
-            return
+        # Allow reconnecting if status isn't CONNECTED
+        if self.peer_info and self.peer_info['ip'] == ip and self.quic_client and self.quic_client.connected:
+            return 
             
-        self.peer_info = info.copy()
+        self.peer_info = info
         self.peer_info['ip'] = ip
         self.dashboard.update_peer("FOUND", ip, name=info.get('hostname'))
-        self.dashboard.add_log("SYSTEM", f"Peer found: {ip}")
+        self.dashboard.add_debug(f"DISC: Peer {info.get('hostname')} at {ip}")
         
-        # Schedule QUIC connection safely
-        self.connecting = True
-        self.dashboard.add_debug(f"Scheduling QUIC to {ip}")
-        logger.info(f"Scheduling connect_quic to {ip}")
-        
-        # Use ensure_future which works from sync callbacks in running loop
-        future = asyncio.ensure_future(self.connect_quic(ip))
-        future.add_done_callback(self._on_connect_done)
-
-    def _on_connect_done(self, future):
-        """Handle completion/failure of connect task."""
-        self.connecting = False
-        try:
-            future.result()  # This will raise if there was an exception
-        except Exception as e:
-            self.dashboard.add_debug(f"Connect failed: {e}")
-            logger.exception(f"Connect task failed: {e}")
+        # Initiate QUIC Connection
+        asyncio.create_task(self.connect_quic(ip))
 
     async def connect_quic(self, ip):
-        logger.info(f"connect_quic started for {ip}")
-        self.dashboard.add_debug(f"QUIC: Connecting {ip}:{cfg.DEFAULT_PORT}")
-        
-        client = QuicClient(cfg.CERT_PATH, dashboard=self.dashboard)
-        self.quic_client = client
-        
-        def on_client_msg(data, _):
-            self.dashboard.add_log("PEER", data)
-            logger.info(f"Client received: {data}")
-        
-        def on_connected():
-            self.dashboard.update_peer("CONNECTED", ip, name=self.peer_info.get('hostname'))
-            self.dashboard.add_log("SYSTEM", "QUIC Link Established!")
-            logger.info("QUIC connected!")
+        self.dashboard.add_debug(f"CLI: Targeting {ip}")
+        try:
+            client = QuicClient(cfg.CERT_PATH, dashboard=self.dashboard)
+            self.quic_client = client
             
-        self.dashboard.add_log("SYSTEM", f"Connecting to {ip}...")
-        
-        # This blocks until connection closes
-        await client.connect_to(ip, cfg.DEFAULT_PORT, on_client_msg, on_connected)
+            def on_client_msg(data, _):
+                self.dashboard.add_log("PEER", data)
+            
+            def on_connected():
+                self.dashboard.update_peer("CONNECTED", ip, name=self.peer_info.get('hostname'))
+                self.dashboard.add_log("SYSTEM", f"Link to {ip} Up!")
+                self.dashboard.add_debug(f"CLI: Connected to {ip}")
+                
+            self.dashboard.add_log("SYSTEM", f"Connecting to {ip}...")
+            await client.connect_to(ip, cfg.DEFAULT_PORT, on_client_msg, on_connected)
+            
+        except Exception as e:
+            self.dashboard.add_debug(f"CLI Task Error: {e}")
 
     async def handle_input(self, msg):
         self.dashboard.add_log("ME", msg)
         if self.quic_client and self.quic_client.connected:
-            self.quic_client.send_message(msg)
+            try:
+                self.quic_client.send_message(msg)
+            except Exception as e:
+                self.dashboard.add_debug(f"Send Error: {e}")
+                self.dashboard.add_log("SYSTEM", "Send Failed.")
         else:
-            self.dashboard.add_log("SYSTEM", "Not connected to peer.")
+            self.dashboard.add_log("SYSTEM", "No active link.")
 
     async def tui_loop(self):
-        """Main Loop that handles UI updates and Raw Input."""
         fd = sys.stdin.fileno()
         old_settings = termios.tcgetattr(fd)
-        
         try:
             tty.setcbreak(fd)
-            
             with self.dashboard.get_live() as live:
                 while self.running:
                     live.update(self.dashboard.generate_layout())
-                    
                     if select.select([sys.stdin], [], [], 0)[0]:
                         ch = sys.stdin.read(1)
-                        if ch == '\x03':  # Ctrl+C
-                            self.running = False
-                            break
-                        elif ch == '\n' or ch == '\r':
-                            if self.input_buffer:
+                        if ch == '\x03': self.running = False; break
+                        elif ch in ('\n', '\r'):
+                            if self.input_buffer.strip():
                                 await self.handle_input(self.input_buffer)
                                 self.input_buffer = ""
-                        elif ch == '\x7f':  # Backspace
-                            self.input_buffer = self.input_buffer[:-1]
-                        elif ch.isprintable():
-                            self.input_buffer += ch
-                            
+                        elif ch == '\x7f': self.input_buffer = self.input_buffer[:-1]
+                        elif ch.isprintable(): self.input_buffer += ch
                         self.dashboard.update_input(self.input_buffer)
-                        
                     await asyncio.sleep(0.01)
-                    
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
