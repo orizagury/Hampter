@@ -26,12 +26,15 @@ class HampterProtocol(QuicConnectionProtocol):
             stream_id = event.stream_id
             
             if stream_id == 0:
-                # Heartbeat (Ping/Pong)
+                # Heartbeat (Ping/Pong) - Client Stream 0
                 pass
-            else:
-                # Chat Data
+            elif stream_id == 4:
+                # Chat Data - Client Stream 4
                 if self._on_message_callback:
                     self._on_message_callback(data, self._transport.get_extra_info('peername'))
+            else:
+                 # Handle generic streams if any
+                 pass
         
         elif isinstance(event, HandshakeCompleted):
             logger.info("QUIC Handshake Completed")

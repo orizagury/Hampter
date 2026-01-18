@@ -1,6 +1,6 @@
 """
 Cyber Dashboard for Hampter Link.
-Uses Rich for layout and PromptToolkit for input (handled in main).
+Uses Rich for layout. Now renders input buffer manually to avoid cursor artifacts.
 """
 from rich.layout import Layout
 from rich.panel import Panel
@@ -19,6 +19,7 @@ class Dashboard:
         self.messages = deque(maxlen=20)
         self.peer_data = {"status": "SEARCHING", "ip": "N/A", "ping": "N/A", "name": "N/A"}
         self.my_info = {"iface": "Unknown", "ip": "Unknown"}
+        self.input_buffer = ""
         
         # Initial Setup
         self.layout.split(
@@ -41,10 +42,13 @@ class Dashboard:
         timestamp = datetime.now().strftime("%H:%M:%S")
         self.messages.append(f"[{timestamp}] [bold]{sender}[/bold]: {message}")
 
+    def update_input(self, text):
+        self.input_buffer = text
+
     def generate_layout(self):
         # Header
         self.layout["header"].update(
-            Panel(Text("HAMPTER LINK PROTOTYPE v1.0", justify="center", style="bold magenta"), style="on black")
+            Panel(Text("HAMPTER LINK PROTOTYPE v1.5", justify="center", style="bold magenta"), style="on black")
         )
         
         # Status Panel
@@ -72,12 +76,16 @@ class Dashboard:
             Panel(log_text, title="DATA LINK LOG", border_style="green", padding=(1, 2))
         )
         
-        # Footer (Placeholder for Prompt)
+        # Footer (Input)
+        # Add visual cursor
+        cursor = "█" 
         self.layout["footer"].update(
-             Panel(Text("Input active below...", style="dim white"), border_style="dim")
+             Panel(Text(f"> {self.input_buffer}{cursor}", style="bold white"), title="COMMAND INPUT", border_style="dim")
         )
         
         return self.layout
 
     def get_live(self):
-        return Live(self.generate_layout(), refresh_per_second=4, screen=True)
+        # Using auto_refresh=False to manually control updates from main loop if needed, 
+        # but here we rely on the main loop calling update.
+        return Live(self.generate_layout(), refresh_per_second=10, screen=True)

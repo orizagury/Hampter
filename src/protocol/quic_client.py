@@ -29,6 +29,8 @@ class QuicClient:
         self.config.verify_mode = False 
         self.protocol = None
         self.connected = False
+        self.chat_stream_id = None
+        self.heartbeat_stream_id = None
     
     async def connect_to(self, ip, port, message_callback):
         logger.info(f"Connecting to {ip}:{port}...")
@@ -43,11 +45,17 @@ class QuicClient:
                 self.connected = True
                 logger.info("Connected to Peer!")
                 
+                # Initialize Streams (Client Initiated Bidirectional)
+                # Stream 0: Heartbeat
+                # Stream 4: Chat
+                self.heartbeat_stream_id = 0 
+                self.chat_stream_id = 4
+                
                 # Keep connection alive
                 while True:
                     await asyncio.sleep(1)
-                    # Send Heartbeat
-                    protocol._quic.send_stream_data(0, b'PING', end_stream=False)
+                    # Send Heartbeat on Stream 0
+                    protocol._quic.send_stream_data(self.heartbeat_stream_id, b'PING', end_stream=False)
                     protocol.transmit()
                     
         except Exception as e:
@@ -55,11 +63,7 @@ class QuicClient:
             self.connected = False
 
     def send_message(self, message: str):
-        if self.connected and self.protocol:
-            # Stream 4 is client-initiated bidirectional usually, 
-            # but streams are complicated in QUIC. 
-            # Simplification: Use next available stream or fix ID.
-            # aioquic allows sending on any stream ID managed by it.
-            stream_id = self.protocol._quic.get_next_available_stream_id()
-            self.protocol._quic.send_stream_data(stream_id, message.encode('utf-8'), end_stream=False)
+        if self.connected and self.protocol and self.chat_stream_id is not None:
+            # Send on Stream 4 (Chat)
+            self.protocol._quic.send_stream_data(self.chat_stream_id, message.encode('utf-8'), end_stream=False)
             self.protocol.transmit()
