@@ -1,5 +1,6 @@
 """
-SOTA Console Interface for Hampter Link using Rich and Prompt Toolkit.
+SOTA Console Interface for Hampter Link.
+Uses PromptToolkit for the REPL and Rich for beautiful output.
 """
 import asyncio
 from typing import Callable, Optional, Dict, Any
@@ -7,27 +8,25 @@ from datetime import datetime
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.patch_stdout import patch_stdout
-from prompt_toolkit.styles import Style
 from prompt_toolkit.formatted_text import HTML
+from prompt_toolkit.styles import Style as PtStyle
 
-from rich.console import Console
-from rich.layout import Layout
+from rich.console import Console as RichConsole
 from rich.panel import Panel
-from rich.live import Live
 from rich.table import Table
-from rich.text import Text
 from rich import box
 
-# Initialize Rich Console
-rconsole = Console()
+# Global Rich Console
+console = RichConsole()
 
 class SotaConsole:
     """
     State-of-the-Art CLI for Hampter Link.
-    Features:
-    - Interactive REPL with history
-    - Live Telemetry Dashboard
-    - Rich Text Logging
+    
+    Structure:
+    - Top: Scrolling logs/chat (Rich)
+    - Bottom: Sticky status bar (PromptToolkit)
+    - Prompt: High-performance input (PromptToolkit)
     """
     
     def __init__(self):
@@ -35,193 +34,159 @@ class SotaConsole:
         self._commands: Dict[str, Callable] = {}
         self._status_provider: Optional[Callable] = None
         self._message_handler: Optional[Callable] = None
-        self._link_handler: Optional[Callable] = None
-        self._fan_handler: Optional[Callable] = None
         
+        # PromptToolkit Session with styling
         self.session = PromptSession()
-        self.messages = [] # List of (timestamp, sender, msg)
         
-        self._register_commands()
-
-    def _register_commands(self):
+        # Register commands
         self._commands = {
             '/help': self._cmd_help,
-            '/quit': self._cmd_quit,
             '/status': self._cmd_status,
-            '/link': self._cmd_link,
-            '/fan': self._cmd_fan,
+            '/quit': self._cmd_quit,
+            '/fan': self._pass, # Hooks added later
+            '/link': self._pass,
         }
+        self._fan_handler = None
+        self._link_handler = None
 
-    # --- Configuration ---
     def set_status_provider(self, provider): self._status_provider = provider
     def set_message_handler(self, handler): self._message_handler = handler
-    def set_link_handler(self, handler): self._link_handler = handler
     def set_fan_handler(self, handler): self._fan_handler = handler
+    def set_link_handler(self, handler): self._link_handler = handler
 
-    # --- UI Components ---
-    def _generate_layout(self) -> Layout:
-        layout = Layout()
-        layout.split_column(
-            Layout(name="header", size=3),
-            Layout(name="body", ratio=1),
-            Layout(name="footer", size=7)
+    def _pass(self, args): pass # Placeholder
+
+    def _get_bottom_toolbar(self):
+        """Generate the status bar text."""
+        if not self._status_provider:
+            return HTML(' <b><style bg="red" fg="white"> OFFLINE </style></b> System Initializing...')
+        
+        stats = self._status_provider()
+        
+        # Format status items
+        cpu = f"{stats.get('cpu_percent', 0):.0f}%"
+        temp = f"{stats.get('temp', 0):.1f}°C"
+        rssi = f"{stats.get('rssi', -100)}dBm"
+        batt = f"{stats.get('battery', 0):.0f}%"
+        
+        # Determine colors based on values
+        temp_color = "red" if stats.get('temp', 0) > 75 else "green"
+        rssi_color = "red" if stats.get('rssi', -100) < -80 else "green"
+        
+        return HTML(
+            f' <b><style bg="#444444" fg="#aaaaaa"> CPU </style></b> {cpu} '
+            f'<b><style bg="#444444" fg="#aaaaaa"> TEMP </style></b> <style fg="{temp_color}">{temp}</style> '
+            f'<b><style bg="#444444" fg="#aaaaaa"> WIFI </style></b> <style fg="{rssi_color}">{rssi}</style> '
+            f'<b><style bg="#444444" fg="#aaaaaa"> BATT </style></b> {batt} '
+            f'   <style fg="#666666">Type /help for commands</style>'
         )
-        # Header
-        layout["header"].update(Panel(
-            Text("HAMPTER LINK v2.0 // COMMAND CENTER", justify="center", style="bold cyan"),
-            style="blue"
-        ))
-        
-        # Body (Chat/Log)
-        # We process messages into a rich Table or Text
-        msg_table = Table(box=None, show_header=False, expand=True)
-        msg_table.add_column("Time", style="dim", width=10)
-        msg_table.add_column("Sender", width=12)
-        msg_table.add_column("Message")
-        
-        # Show last 15 messages
-        for ts, sender, msg in self.messages[-15:]:
-            style = "green" if sender == "You" else "cyan"
-            msg_table.add_row(ts, Text(f"[{sender}]", style=style), msg)
-            
-        layout["body"].update(Panel(msg_table, title="Chatter Lane", border_style="green"))
-        
-        # Footer (Telemetry)
-        if self._status_provider:
-            stats = self._status_provider()
-            
-            grid = Table.grid(expand=True, padding=1)
-            grid.add_column(justify="center", ratio=1)
-            grid.add_column(justify="center", ratio=1)
-            grid.add_column(justify="center", ratio=1)
-            
-            # Telemetry panels
-            temp_color = "red" if stats.get('temp', 0) > 70 else "green"
-            grid.add_row(
-                Panel(f"{stats.get('temp', 0):.1f}°C\nCPU Temp", style=temp_color),
-                Panel(f"{stats.get('rssi', -99)}dBm\nWiFi RSSI", style="cyan"),
-                Panel(f"{stats.get('battery', 0)}%\nBattery", style="yellow"),
-            )
-            layout["footer"].update(grid)
-        else:
-            layout["footer"].update(Panel("Telemetry Offline", style="dim"))
-            
-        return layout
 
-    # --- Main Loop ---
     async def run(self):
         self.running = True
         
-        # We need a refresh task for the UI
-        refresh_task = asyncio.create_task(self._ui_refresh_loop())
+        # Print Banner
+        console.print(Panel(
+            "[bold cyan]HAMPTER LINK v2.0[/bold cyan]\n[dim]Secure. Off-Grid. Connected.[/dim]",
+            border_style="blue",
+            box=box.ROUNDED
+        ))
         
-        # Input Loop
+        # Main Loop
         with patch_stdout():
             while self.running:
                 try:
-                    # Non-blocking input prompt
-                    input_text = await self.session.prompt_async(
-                        HTML('<style fg="ansiwhite">></style> '),
+                    # The prompt call handles the UI refresh automatically
+                    command = await self.session.prompt_async(
+                        HTML('<style fg="#00ffff"><b>[hampter]</b></style> <style fg="#bbbbbb">></style> '),
+                        bottom_toolbar=self._get_bottom_toolbar,
+                        refresh_interval=1.0, # Update toolbar every second
                     )
                     
-                    if not input_text: continue
-                    
-                    await self._process_input(input_text.strip())
+                    if not command.strip(): continue
+                    await self._process_command(command)
                     
                 except (EOFError, KeyboardInterrupt):
                     self.running = False
-                except Exception as e:
-                    rconsole.print(f"[red]Error: {e}[/red]")
-        
-        refresh_task.cancel()
-        rconsole.print("[yellow]Console stopped.[/yellow]")
+                    
+        console.print("[yellow]Shutting down console...[/yellow]")
 
-    async def _ui_refresh_loop(self):
-        """Redraw the UI every 1s."""
-        # Note: In a real 'live' TUI, we would wrap the whole thing in Live()
-        # But since we need simultaneous input, we just print updates or use Live carefully.
-        # For simplicity in this async context with PromptToolkit, 
-        # we will just have the prompt be the main interaction 
-        # and print 'Logs' above it. 
-        # A full Live layout + PromptToolkit is complex. 
-        # Let's simplify: Standard prompt, but use Rich for all command outputs.
-        pass
-
-    async def _process_input(self, text: str):
+    async def _process_command(self, text: str):
+        text = text.strip()
         if text.startswith('/'):
             parts = text.split()
             cmd = parts[0].lower()
-            args = parts[1:] if len(parts) > 1 else []
+            args = parts[1:]
             
-            if cmd in self._commands:
-                await self._commands[cmd](args)
+            # Dispatch command
+            if cmd == '/quit': self.running = False
+            elif cmd == '/help': await self._cmd_help(args)
+            elif cmd == '/status': await self._cmd_status(args)
+            elif cmd == '/fan': await self._cmd_fan_proxy(args)
+            elif cmd == '/link': await self._cmd_link_proxy(args)
             else:
-                rconsole.print(f"[red]Unknown command: {cmd}[/red]")
+                console.print(f"[red]Unknown command: {cmd}[/red]")
         else:
-            # Send Message
+            # Chat message
             if self._message_handler:
                 self._message_handler(text)
-                self.add_message("You", text)
+                timestamp = datetime.now().strftime("%H:%M")
+                console.print(f"[dim]{timestamp}[/dim] [bold green]Me:[/bold green] {text}")
 
-    def add_message(self, sender: str, text: str):
-        ts = datetime.now().strftime("%H:%M")
-        self.messages.append((ts, sender, text))
-        
-        # Print immediately for now (since we aren't using full-screen Live due to input complexity)
-        style = "green bold" if sender == "You" else "cyan bold"
-        rconsole.print(f"[{style}][{sender}][/{style}] {text}")
-
-    # --- Commands ---
+    # --- Command Handlers ---
+    
     async def _cmd_help(self, args):
-        table = Table(title="Available Commands")
-        table.add_column("Command", style="cyan")
-        table.add_column("Description")
-        
-        table.add_row("/status", "Show telemetry dashboard")
-        table.add_row("/send <msg>", "Send a chat message")
-        table.add_row("/link", "Start/Stop video link")
-        table.add_row("/fan <0-100>", "Set fan speed")
-        table.add_row("/quit", "Exit application")
-        
-        rconsole.print(table)
+        t = Table(show_header=False, box=None)
+        t.add_column("Cmd", style="bold cyan")
+        t.add_column("Desc")
+        t.add_row("/status", "Show full system telemetry")
+        t.add_row("/send", "Send message (or just type)")
+        t.add_row("/fan", "Set fan speed (0-100 or auto)")
+        t.add_row("/link", "Toggle video link")
+        t.add_row("/quit", "Exit application")
+        console.print(Panel(t, title="Available Commands", border_style="grey50"))
 
     async def _cmd_status(self, args):
-        if not self._status_provider:
-            return
-            
-        stats = self._status_provider()
+        if not self._status_provider: return
+        s = self._status_provider()
         
-        grid = Table.grid(padding=1)
-        grid.add_column()
-        grid.add_column()
+        # Create a dashboard grid
+        grid = Table.grid(padding=2)
+        grid.add_column(); grid.add_column(); grid.add_column()
         
         grid.add_row(
-            Panel(f"[bold]{stats.get('temp',0):.1f}°C[/bold]\nCPU Temp", border_style="red"),
-            Panel(f"[bold]{stats.get('rssi',-100)} dBm[/bold]\nWiFi Strength", border_style="blue")
+            f"[b]CPU[/b]: {s.get('cpu_percent')}%",
+            f"[b]RAM[/b]: {s.get('ram_percent')}%",
+            f"[b]SSD[/b]: {s.get('disk_percent', 'N/A')}%"
         )
         grid.add_row(
-            Panel(f"[bold]{stats.get('cpu_percent',0)}%[/bold]\nCPU Load", border_style="yellow"),
-            Panel(f"[bold]{stats.get('ram_percent',0)}%[/bold]\nRAM Usage", border_style="magenta")
+            f"[b]Temp[/b]: {s.get('temp'):.1f}°C",
+            f"[b]Fan[/b]: {s.get('fan_speed', 'Auto')}",
+            f"[b]Bat[/b]: {s.get('battery')}%"
         )
-        
-        rconsole.print(Panel(grid, title="System Telemetry", border_style="green"))
+        console.print(Panel(grid, title="System Status", border_style="blue"))
 
-    async def _cmd_link(self, args):
+    async def _cmd_fan_proxy(self, args):
+        if self._fan_handler and args:
+            try:
+                val = int(args[0])
+                self._fan_handler(val)
+                console.print(f"[green]Fan set to {val}%[/green]")
+            except:
+                console.print("[red]Invalid speed[/red]")
+        elif self._fan_handler and not args:
+             # Auto
+             self._fan_handler(-1)
+             console.print("[green]Fan set to Auto[/green]")
+
+    async def _cmd_link_proxy(self, args):
         if self._link_handler:
-            self._link_handler() # Toggle or start
-            rconsole.print("[yellow]Link command sent.[/yellow]")
-
-    async def _cmd_fan(self, args):
-        if not args or not self._fan_handler: return
-        try:
-            val = int(args[0])
-            self._fan_handler(val)
-            rconsole.print(f"[green]Fan set to {val}%[/green]")
-        except:
-            rconsole.print("[red]Invalid fan speed[/red]")
+            self._link_handler()
+            console.print("[yellow]Toggled Video Link[/yellow]")
 
     async def _cmd_quit(self, args):
+        """Exit command."""
         self.running = False
+
 
     def stop(self):
         self.running = False

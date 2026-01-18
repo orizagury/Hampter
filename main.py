@@ -2,6 +2,10 @@
 Hampter Link - Main Entry Point
 Supports GUI and CLI modes.
 """
+import warnings
+# Suppress noisy warnings immediately
+warnings.filterwarnings("ignore")
+
 import sys
 import asyncio
 import argparse
@@ -11,17 +15,15 @@ import signal
 from typing import Optional
 
 # Setup Logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(name)s] %(message)s')
+logging.basicConfig(level=logging.ERROR, format='%(asctime)s [%(name)s] %(message)s')
 logger = logging.getLogger("Main")
-# Suppress noisy logs
-logging.getLogger("asyncio").setLevel(logging.WARNING)
+logging.getLogger("asyncio").setLevel(logging.CRITICAL) # Silence asyncio
 
 # Global shutdown event
 shutdown_event = asyncio.Event()
 
 def signal_handler(sig, frame):
     """Handle Ctrl+C cleanly."""
-    logger.info("Shutdown signal received...")
     shutdown_event.set()
 
 def load_config(path: str = "config.json") -> dict:
@@ -29,11 +31,10 @@ def load_config(path: str = "config.json") -> dict:
         with open(path, "r") as f:
             return json.load(f)
     except Exception:
-        # Default config fallback
         return {
             "node_type": "A",
             "network": {"interface": "wlan0"},
-            "hardware": {"lcd_address": 0x27, "fan_pin": 18},
+            "hardware": {"lcd_address": 0x27, "fan_pin": 2},
             "security": {}
         }
 
@@ -73,7 +74,7 @@ async def async_main(args, config):
             **(wifi.get_stats() if wifi else {})
         })
         
-        console.set_fan_handler(lambda s: fan_ctrl.set_manual_speed(s))
+        console.set_fan_handler(lambda s: fan_ctrl.set_manual_speed(s) if s >= 0 else fan_ctrl.set_auto_mode())
         
         # Run console
         console_task = asyncio.create_task(console.run())
@@ -88,34 +89,36 @@ async def async_main(args, config):
         console.stop()
         
     else:
-        # GUI Mode
-        # TODO: GUI integration with asyncio.Event based shutdown
-        # For now, we keep the simpler GUI loop if user requested GUI
-        logger.error("GUI mode requires refactor for new signal handling. Use --mode cli")
+        print("GUI mode requires local display. Use --mode cli for headless.")
         return
 
     # Cleanup Sequence
-    logger.info("Cleaning up resources...")
-    
     fan_ctrl.stop()
     if lcd: lcd.stop()
     
-    for t in tasks:
-        t.cancel()
+    for t in tasks: t.cancel()
     
-    # Allow tasks to cancel
-    await asyncio.gather(*tasks, return_exceptions=True)
-    logger.info("Shutdown complete.")
+    # Allow tasks to cancel silently
+    try:
+        await asyncio.gather(*tasks, return_exceptions=True)
+    except Exception:
+        pass
 
 
 def main():
     parser = argparse.ArgumentParser(description="Hampter Link")
+    # Allow --cli as a shortcut flag
+    parser.add_argument('--cli', action='store_true', help="Shortcut for --mode cli")
     parser.add_argument('--mode', choices=['gui','cli'], default='gui')
     parser.add_argument('--config', default='config.json')
     parser.add_argument('--no-lcd', action='store_true')
     parser.add_argument('--no-fan', action='store_true')
     parser.add_argument('--no-wifi', action='store_true')
     args = parser.parse_args()
+
+    # Handle the --cli shortcut
+    if args.cli:
+        args.mode = 'cli'
 
     config = load_config(args.config)
     
@@ -124,13 +127,11 @@ def main():
     signal.signal(signal.SIGTERM, signal_handler)
 
     if args.mode == 'gui':
-        # Legacy GUI entry (simpler to keep separate for now given PyQt constraints)
-        print("Please run with --mode cli for the new SOTA console.")
+        print("Please run with --mode cli (or --cli) for the console.")
     else:
         try:
             asyncio.run(async_main(args, config))
         except KeyboardInterrupt:
-            # Catch the one that might leak through
             pass
 
 if __name__ == "__main__":

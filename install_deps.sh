@@ -14,7 +14,8 @@ sudo apt install -y \
     gstreamer1.0-tools gstreamer1.0-alsa \
     iw hostapd \
     build-essential libssl-dev libffi-dev \
-    libgirepository1.0-dev libcairo2-dev pkg-config python3-dev
+    libgirepository1.0-dev libcairo2-dev pkg-config python3-dev \
+    python3-lgpio
 
 echo "[*] Installing PyQt6 via apt (required for ARM64)..."
 sudo apt install -y python3-pyqt6 || {
@@ -41,4 +42,4 @@ echo ""
 echo "[SUCCESS] Dependencies installed. You are ready to Link."
 echo ""
 echo "To activate the environment: source venv/bin/activate"
-echo "To run the application:      python main.py"
+echo "To run the application:      python main.py --mode cli"
