@@ -114,19 +114,20 @@ class HamperLinkApp:
         asyncio.create_task(self.connect_quic(ip))
 
     async def connect_quic(self, ip):
-        client = QuicClient(cfg.CERT_PATH)
+        client = QuicClient(cfg.CERT_PATH, dashboard=self.dashboard)
         self.quic_client = client
         
         def on_client_msg(data, _):
             self.dashboard.add_log("PEER", data)
+        
+        def on_connected():
+            self.dashboard.update_peer("CONNECTED", ip, name=self.peer_info.get('hostname'))
+            self.dashboard.add_log("SYSTEM", "QUIC Link Established!")
             
         self.dashboard.add_log("SYSTEM", f"Connecting to {ip}...")
         
-        await client.connect_to(ip, cfg.DEFAULT_PORT, on_client_msg)
-        
-        if client.connected:
-            self.dashboard.update_peer("CONNECTED", ip, name=self.peer_info.get('hostname'))
-            self.dashboard.add_log("SYSTEM", "QUIC Link Established!")
+        # This runs in background, the callback fires when connected
+        await client.connect_to(ip, cfg.DEFAULT_PORT, on_client_msg, on_connected)
 
     async def handle_input(self, msg):
         self.dashboard.add_log("ME", msg)
