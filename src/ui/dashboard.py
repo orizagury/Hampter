@@ -55,10 +55,24 @@ class Dashboard:
     def update_input(self, text):
         self.input_buffer = text
 
+    def clear_logs(self):
+        self.messages.clear()
+        self.add_debug("UI: Chat logs cleared.")
+
+    def clear_debug(self):
+        self.debug_log.clear()
+
     def generate_layout(self):
-        # Header
+        # Header - Ultra Cyber Style
+        header_text = Text.assemble(
+            (" HAMPTER ", "bold white on magenta"),
+            (" LINK ", "bold magenta on black"),
+            ("v1.7 ", "dim italic"),
+            ("⬢ ", "bold cyan"),
+            ("SECURE P2P MESH", "bold cyan")
+        )
         self.layout["header"].update(
-            Panel(Text("HAMPTER LINK PROTOTYPE v1.6 (DEBUG MODE)", justify="center", style="bold magenta"), style="on black")
+            Panel(header_text, style="magenta", border_style="magenta", padding=(0,1))
         )
         
         # Status Panel

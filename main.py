@@ -181,6 +181,22 @@ class HamperLinkApp:
                 self.active_link = None
 
     async def handle_input(self, msg):
+        msg = msg.strip()
+        if not msg: return
+
+        # Command Parsing
+        if msg.startswith("/"):
+            cmd = msg[1:].lower()
+            if cmd == "clear":
+                self.dashboard.clear_logs()
+                return
+            elif cmd == "help":
+                self.dashboard.add_log("SYSTEM", "Available commands: /clear, /help")
+                return
+            else:
+                self.dashboard.add_log("SYSTEM", f"Unknown command: {msg}")
+                return
+
         self.dashboard.add_log("ME", msg)
         
         # Determine how to send
