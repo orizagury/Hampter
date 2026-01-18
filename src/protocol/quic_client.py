@@ -68,12 +68,6 @@ class QuicClient:
                     
                 protocol._on_connect_callback = on_handshake_done
                 
-                # If wait_connected=True, we might already be connected here
-                # but aioquic events might fire slightly before/after.
-                # We double check protocol state:
-                if protocol._quic._state_verified:
-                     on_handshake_done()
-
                 # Keep connection alive
                 while True:
                     await asyncio.sleep(2)

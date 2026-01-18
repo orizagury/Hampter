@@ -21,9 +21,9 @@ class HampterProtocol(QuicConnectionProtocol):
     def quic_event_received(self, event):
         if isinstance(event, HandshakeCompleted):
             logger.info("SRV: Handshake Completed")
-            if self._on_connect_callback:
+            if HampterProtocol._on_connect_callback:
                 peer = self._transport.get_extra_info('peername')
-                self._on_connect_callback(peer)
+                HampterProtocol._on_connect_callback(peer)
                 
         elif isinstance(event, StreamDataReceived):
             try:
@@ -34,8 +34,8 @@ class HampterProtocol(QuicConnectionProtocol):
                     # Heartbeat
                     pass
                 elif stream_id == 4:
-                    if self._on_message_callback:
-                        self._on_message_callback(data, self._transport.get_extra_info('peername'))
+                    if HampterProtocol._on_message_callback:
+                        HampterProtocol._on_message_callback(data, self._transport.get_extra_info('peername'))
             except Exception as e:
                 logger.error(f"SRV Decode error: {e}")
                 
