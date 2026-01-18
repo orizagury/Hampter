@@ -17,6 +17,7 @@ class HampterClientProtocol(QuicConnectionProtocol):
         super().__init__(*args, **kwargs)
         self._on_message_callback = None
         self._on_connect_callback = None
+        self._on_disconnect_callback = None
 
     def quic_event_received(self, event):
         if isinstance(event, HandshakeCompleted):
@@ -32,6 +33,8 @@ class HampterClientProtocol(QuicConnectionProtocol):
                 logger.error(f"Decode error: {e}")
         elif isinstance(event, ConnectionTerminated):
             logger.warning("QUIC Connection Terminated")
+            if self._on_disconnect_callback:
+                self._on_disconnect_callback()
 
 class QuicClient:
     def __init__(self, cert_path, dashboard=None):
@@ -77,6 +80,13 @@ class QuicClient:
                 # we might have missed the trigger. We manually sync state here.
                 if not self.connected:
                     on_handshake_done()
+                
+                # Proactively "Touch" the chat stream to open it for the server
+                try:
+                    protocol._quic.send_stream_data(self.chat_stream_id, b"", end_stream=False)
+                    protocol.transmit()
+                except Exception as e:
+                    logger.warning(f"Initial stream touch failed: {e}")
                 
                 # Keep connection alive
                 while True:

@@ -14,6 +14,7 @@ logger = logging.getLogger("QuicServer")
 class HampterProtocol(QuicConnectionProtocol):
     _on_message_callback: Optional[Callable] = None
     _on_connect_callback: Optional[Callable] = None
+    _on_disconnect_callback: Optional[Callable] = None
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -49,6 +50,12 @@ class HampterProtocol(QuicConnectionProtocol):
                 
         elif isinstance(event, ConnectionTerminated):
             logger.info("SRV: Connection Terminated")
+            if HampterProtocol._on_disconnect_callback:
+                # Use same logic to get IP as on_connect
+                peer = self._transport.get_extra_info('peername')
+                if not peer: peer = self._transport.get_extra_info('addr')
+                if not peer: peer = getattr(self._transport, '_address', None)
+                HampterProtocol._on_disconnect_callback(peer or ("Unknown", 0))
 
     def send_message(self, message: str):
         """Allow server protocol to send data back to client."""

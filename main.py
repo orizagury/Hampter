@@ -111,9 +111,20 @@ class HamperLinkApp:
             except Exception as e:
                 logger.error(f"on_server_connect Error: {e}")
         
+        def on_server_disconnect(peer):
+            try:
+                ip = peer[0] if (peer and len(peer) > 0) else "Unknown"
+                if ip in self.peers:
+                    del self.peers[ip]
+                    self.dashboard.update_peer("MESH", "N/A", count=len(self.peers))
+                    self.dashboard.add_log("SYSTEM", f"Node {ip} left mesh.")
+            except Exception as e:
+                logger.error(f"on_server_disconnect Error: {e}")
+
         # Inject callbacks into Protocol class (Hack for aioquic architecture)
         HampterProtocol._on_message_callback = on_server_msg
         HampterProtocol._on_connect_callback = on_server_connect
+        HampterProtocol._on_disconnect_callback = on_server_disconnect
 
         try:
             server = await serve(
@@ -169,6 +180,10 @@ class HamperLinkApp:
                     self.dashboard.update_peer("MESH", ip, name=info.get('hostname'), count=len(self.peers))
                     self.dashboard.add_log("SYSTEM", f"Mesh Link to {ip} Up!")
                     self.dashboard.add_debug(f"CLI: Linked with {ip}")
+                    
+                    # Also register disconnect for client
+                    if client.protocol:
+                        client.protocol._on_disconnect_callback = lambda: self.on_client_disconnect(ip)
                 except Exception as e:
                     logger.error(f"on_connected Error: {e}")
                 
@@ -179,6 +194,12 @@ class HamperLinkApp:
             self.dashboard.add_debug(f"CLI Fail {ip}: {e}")
         finally:
             self.connecting_ips.discard(ip)
+            
+    def on_client_disconnect(self, ip):
+        if ip in self.peers:
+            del self.peers[ip]
+            self.dashboard.update_peer("MESH", "N/A", count=len(self.peers))
+            self.dashboard.add_log("SYSTEM", f"Active link to {ip} lost.")
 
     async def handle_input(self, msg):
         msg = msg.strip()
@@ -191,7 +212,15 @@ class HamperLinkApp:
                 self.dashboard.clear_logs()
                 return
             elif cmd == "help":
-                self.dashboard.add_log("SYSTEM", "Available commands: /clear, /help")
+                self.dashboard.add_log("SYSTEM", "Available commands: /clear, /help, /mesh")
+                return
+            elif cmd == "mesh":
+                if not self.peers:
+                    self.dashboard.add_log("SYSTEM", "Mesh is empty.")
+                else:
+                    self.dashboard.add_log("SYSTEM", f"Mesh Nodes ({len(self.peers)}):")
+                    for ip, info in self.peers.items():
+                        self.dashboard.add_log("SYSTEM", f" - {ip} ({info['type']})")
                 return
             else:
                 self.dashboard.add_log("SYSTEM", f"Unknown command: {msg}")

@@ -38,7 +38,7 @@ if ! iw dev "$IFACE" set type ibss; then
 fi
 
 echo "[*] Configuring static IP $IP_ADDR..."
-ip addr add "$IP_ADDR/24" broadcast + dev "$IFACE"
+ip addr add "$IP_ADDR/16" broadcast + dev "$IFACE"
 
 echo "[*] Bringing up $IFACE..."
 ip link set "$IFACE" up
