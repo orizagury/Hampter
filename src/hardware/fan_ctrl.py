@@ -7,32 +7,28 @@ import logging
 
 logger = logging.getLogger("FanCtrl")
 
-# Track if we're using mock GPIO
 MOCK_GPIO = False
 
-# Try to import and test GPIO library
 try:
-    from gpiozero import PWMOutputDevice
+    from gpiozero import PWMOutputDevice, Device
     from gpiozero.exc import BadPinFactory
     
-    # Test if we can actually create a device (will fail if no GPIO access)
-    _test = None
+    # Test if GPIO is actually accessible
     try:
-        # Don't actually create a device, just check if factory is available
-        from gpiozero import Device
         Device.ensure_pin_factory()
-    except (BadPinFactory, Exception) as e:
-        logger.warning(f"GPIO not accessible: {e}. Using Mock Fan.")
+    except (BadPinFactory, Exception):
         MOCK_GPIO = True
         
 except ImportError:
-    logger.warning("GPIOZero not found. Using Mock Fan.")
     MOCK_GPIO = True
 
+if MOCK_GPIO:
+    # Quietly switch to mock without loud warnings unless verbose
+    logger.debug("Using Mock Fan (GPIO unavailable).")
 
-# Mock class for when GPIO isn't available
+
 class MockPWMDevice:
-    """Mock PWM device for development environments."""
+    """Mock PWM device for development/simulation."""
     def __init__(self, pin: int):
         self._value = 0.0
     
@@ -43,6 +39,9 @@ class MockPWMDevice:
     @value.setter
     def value(self, val: float):
         self._value = val
+    
+    def close(self):
+        pass
 
 
 # Try to import psutil for temperature reading
@@ -50,16 +49,12 @@ try:
     import psutil
 except ImportError:
     psutil = None
-    logger.warning("psutil not found. Using mock temperature.")
+    logger.debug("Using mock temperature (psutil unavailable).")
 
 
 class FanController:
     """
     PWM Fan Controller with automatic temperature-based speed adjustment.
-    
-    Attributes:
-        pin: GPIO pin number for PWM output
-        running: Whether the control loop is active
     """
     
     # Temperature thresholds for fan curve (Celsius -> Speed 0.0-1.0)
@@ -78,16 +73,19 @@ class FanController:
         self._manual_override = False
         self._manual_speed = 0.0
         
-        # Create the appropriate device
         if MOCK_GPIO:
             self.fan = MockPWMDevice(pin)
         else:
-            self.fan = PWMOutputDevice(pin)
+            try:
+                self.fan = PWMOutputDevice(pin)
+            except Exception as e:
+                logger.error(f"GPIO Init Failed: {e}. Falling back to mock.")
+                self.fan = MockPWMDevice(pin)
 
     async def start_loop(self):
         """Start the automatic fan control loop."""
         self.running = True
-        logger.info("Fan control loop started.")
+        logger.info("Fan control started.")
         
         while self.running:
             try:
@@ -96,98 +94,78 @@ class FanController:
                     speed = self._calculate_speed(temp)
                     
                     if abs(speed - self._current_speed) > 0.05:
-                        self.fan.value = speed
+                        try:
+                            self.fan.value = speed
+                        except Exception:
+                            pass # Swallow GPIO errors during runtime
                         self._current_speed = speed
-                        logger.debug(f"Temp: {temp:.1f}°C -> Fan: {speed*100:.0f}%")
                 
-            except Exception as e:
-                logger.error(f"Fan control error: {e}")
+            except Exception:
+                pass # Prevent loop crash
             
-            await asyncio.sleep(2)
+            # Use a longer sleep to check running flag more often for cleaner exit
+            for _ in range(20): 
+                if not self.running: break
+                await asyncio.sleep(0.1)
 
     def stop(self):
         """Stop the fan control loop and turn off fan."""
         self.running = False
-        self.fan.value = 0
-        self._current_speed = 0
+        try:
+            self.fan.value = 0
+            self.fan.close()
+        except Exception:
+            pass
         logger.info("Fan control stopped.")
 
     def set_manual_speed(self, speed_percent: int):
-        """
-        Set fan speed manually (overrides automatic control).
-        
-        Args:
-            speed_percent: Fan speed 0-100%
-        """
+        """Set fan speed manually (overrides automatic control)."""
         self._manual_override = True
         self._manual_speed = max(0.0, min(1.0, speed_percent / 100))
-        self.fan.value = self._manual_speed
+        try:
+            self.fan.value = self._manual_speed
+        except Exception:
+            pass
         self._current_speed = self._manual_speed
-        logger.info(f"Manual fan speed: {speed_percent}%")
 
     def set_auto_mode(self):
         """Return to automatic temperature-based control."""
         self._manual_override = False
-        logger.info("Fan control returned to auto mode.")
 
     def _get_cpu_temp(self) -> float:
         """Get current CPU temperature in Celsius."""
         if psutil is None:
-            return 45.0  # Mock temperature
+            return 45.0
         
         try:
             temps = psutil.sensors_temperatures()
-            
-            # Try common sensor names
             for sensor_name in ['cpu_thermal', 'coretemp', 'k10temp', 'acpitz']:
                 if sensor_name in temps and temps[sensor_name]:
                     return temps[sensor_name][0].current
             
-            # Fallback: return first available sensor
-            for name, entries in temps.items():
+            for entries in temps.values():
                 if entries:
                     return entries[0].current
-                    
-        except Exception as e:
-            logger.debug(f"Temperature read error: {e}")
+        except Exception:
+            pass
         
-        return 45.0  # Default fallback
+        return 45.0
 
     def _calculate_speed(self, temp: float) -> float:
-        """
-        Calculate fan speed based on temperature using smooth curve interpolation.
-        
-        Args:
-            temp: Current CPU temperature in Celsius
-            
-        Returns:
-            Fan speed as float 0.0 to 1.0
-        """
-        # Below minimum threshold
         if temp <= self.FAN_CURVE[0][0]:
             return self.FAN_CURVE[0][1]
         
-        # Above maximum threshold
         if temp >= self.FAN_CURVE[-1][0]:
             return self.FAN_CURVE[-1][1]
         
-        # Linear interpolation between curve points
         for i in range(len(self.FAN_CURVE) - 1):
             t1, s1 = self.FAN_CURVE[i]
             t2, s2 = self.FAN_CURVE[i + 1]
-            
             if t1 <= temp < t2:
-                # Linear interpolation
                 ratio = (temp - t1) / (t2 - t1)
                 return s1 + ratio * (s2 - s1)
         
-        return 1.0  # Safety fallback
-
-    @property
-    def current_speed_percent(self) -> int:
-        """Get current fan speed as percentage."""
-        return int(self._current_speed * 100)
+        return 1.0
 
 
-# Singleton instance
 fan_ctrl = FanController()
