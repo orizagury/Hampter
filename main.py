@@ -21,6 +21,7 @@ from src.protocol.certificates import CertificateManager
 from src.protocol.quic_server import HampterProtocol, build_quic_config
 from src.protocol.quic_client import QuicClient
 from src.ui.dashboard import Dashboard
+from src.hw.display import LCDDisplay
 
 # Logging: Redirect all logs to a file to keep TUI clean
 logging.basicConfig(
@@ -33,6 +34,7 @@ logger = logging.getLogger("Main")
 class HamperLinkApp:
     def __init__(self):
         self.dashboard = Dashboard()
+        self.lcd = LCDDisplay()
         self.loop = asyncio.new_event_loop()
         self.quic_client = None
         self.active_link = None # Client or Server protocol object
@@ -91,6 +93,7 @@ class HamperLinkApp:
                 ip = peer[0] if (peer and len(peer) > 0) else "Peer"
                 self.dashboard.add_log(f"PEER({ip})", data)
                 self.dashboard.add_debug(f"SRV: RX Data from {ip}")
+                self.lcd.show_msg(ip, data)
             except Exception as e:
                 logger.error(f"on_server_msg Error: {e}")
         
@@ -157,6 +160,7 @@ class HamperLinkApp:
             
             def on_client_msg(data, _):
                 self.dashboard.add_log("PEER", data)
+                self.lcd.show_msg(ip, data)
             
             def on_connected():
                 try:
