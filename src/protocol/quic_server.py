@@ -27,9 +27,11 @@ class HampterProtocol(QuicConnectionProtocol):
                 if not peer:
                     peer = self._transport.get_extra_info('addr')
                 if not peer:
+                    # Fallback to internal address tracking if available
                     peer = getattr(self._transport, '_address', None)
                 
-                HampterProtocol._on_connect_callback(peer or ("Unknown", 0))
+                # Pass both peer info AND this protocol instance
+                HampterProtocol._on_connect_callback(peer or ("Unknown", 0), self)
                 
         elif isinstance(event, StreamDataReceived):
             try:
@@ -47,6 +49,14 @@ class HampterProtocol(QuicConnectionProtocol):
                 
         elif isinstance(event, ConnectionTerminated):
             logger.info("SRV: Connection Terminated")
+
+    def send_message(self, message: str):
+        """Allow server protocol to send data back to client."""
+        try:
+            self._quic.send_stream_data(4, message.encode('utf-8'), end_stream=False)
+            self.transmit()
+        except Exception as e:
+            logger.error(f"SRV Send Error: {e}")
 
 def build_quic_config(cert_path, key_path):
     configuration = QuicConfiguration(is_client=False)

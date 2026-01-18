@@ -65,12 +65,18 @@ class QuicClient:
                 protocol._on_message_callback = message_callback
                 
                 def on_handshake_done():
-                    self.connected = True
-                    if self.dashboard:
-                        self.dashboard.add_debug("CLI: Handshake OK!")
-                    connect_callback()
+                    if not self.connected:
+                        self.connected = True
+                        if self.dashboard:
+                            self.dashboard.add_debug("CLI: Handshake OK!")
+                        connect_callback()
                     
                 protocol._on_connect_callback = on_handshake_done
+                
+                # wait_connected=True returns AFTER handshake. If event happened during wait, 
+                # we might have missed the trigger. We manually sync state here.
+                if not self.connected:
+                    on_handshake_done()
                 
                 # Keep connection alive
                 while True:

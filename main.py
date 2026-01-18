@@ -10,6 +10,7 @@ import tty
 import termios
 import select
 import traceback
+import ipaddress
 from aioquic.asyncio import serve
 
 # Core Modules
@@ -34,6 +35,7 @@ class HamperLinkApp:
         self.dashboard = Dashboard()
         self.loop = asyncio.new_event_loop()
         self.quic_client = None
+        self.active_link = None # Client or Server protocol object
         self.peer_info = None
         self.running = True
         self.input_buffer = ""
@@ -92,11 +94,12 @@ class HamperLinkApp:
             except Exception as e:
                 logger.error(f"on_server_msg Error: {e}")
         
-        def on_server_connect(peer):
+        def on_server_connect(peer, protocol):
             try:
                 ip = peer[0] if (peer and len(peer) > 0) else "Unknown"
                 self.dashboard.add_debug(f"SRV: New Conn from {ip}")
                 self.dashboard.update_peer("CONNECTED", ip)
+                self.active_link = protocol # Adopt server side for sending
             except Exception as e:
                 logger.error(f"on_server_connect Error: {e}")
         
@@ -122,7 +125,17 @@ class HamperLinkApp:
         await self.tui_loop()
 
     def on_peer_found(self, info, ip):
-        # Prevent connection storm: Skip if already connected or connecting to this IP
+        # Tie-breaking rule: Only connect if my IP is "smaller"
+        # This prevents both nodes from calling each other and fighting.
+        try:
+            my_val = int(ipaddress.ip_address(cfg.ip_address))
+            peer_val = int(ipaddress.ip_address(ip))
+            if my_val > peer_val:
+                return
+        except:
+            if cfg.ip_address > ip: return
+
+        # Prevent connection storm
         if self.quic_client:
             if self.quic_client.connected or getattr(self.quic_client, 'connecting', False):
                 if getattr(self.quic_client, 'target_ip', None) == ip:
@@ -147,6 +160,7 @@ class HamperLinkApp:
             
             def on_connected():
                 try:
+                    self.active_link = client.protocol # Adopt client side for sending
                     self.dashboard.update_peer("CONNECTED", ip, name=self.peer_info.get('hostname'))
                     self.dashboard.add_log("SYSTEM", f"Link to {ip} Up!")
                     self.dashboard.add_debug(f"CLI: Connected to {ip}")
@@ -158,12 +172,24 @@ class HamperLinkApp:
             
         except Exception as e:
             self.dashboard.add_debug(f"CLI Task Error: {e}")
+            self.quic_client = None
+            if self.active_link == client.protocol:
+                self.active_link = None
 
     async def handle_input(self, msg):
         self.dashboard.add_log("ME", msg)
+        
+        # Determine how to send
+        target = None
         if self.quic_client and self.quic_client.connected:
+            target = self.quic_client
+        elif self.active_link:
+            target = self.active_link
+
+        if target:
             try:
-                self.quic_client.send_message(msg)
+                # Both QuicClient and HampterProtocol (server) should have send_message
+                target.send_message(msg)
             except Exception as e:
                 self.dashboard.add_debug(f"Send Error: {e}")
                 self.dashboard.add_log("SYSTEM", "Send Failed.")
