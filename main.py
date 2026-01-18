@@ -36,9 +36,11 @@ class HamperLinkApp:
         self.dashboard = Dashboard()
         self.lcd = LCDDisplay()
         self.loop = asyncio.new_event_loop()
-        self.quic_client = None
-        self.active_link = None # Client or Server protocol object
-        self.peer_info = None
+        
+        # Peer Registry: { "ip": { "type": "client|server", "protocol": protocol_obj, "name": "hostname" } }
+        self.peers = {} 
+        self.connecting_ips = set() 
+        
         self.running = True
         self.input_buffer = ""
         
@@ -101,8 +103,11 @@ class HamperLinkApp:
             try:
                 ip = peer[0] if (peer and len(peer) > 0) else "Unknown"
                 self.dashboard.add_debug(f"SRV: New Conn from {ip}")
-                self.dashboard.update_peer("CONNECTED", ip)
-                self.active_link = protocol # Adopt server side for sending
+                
+                if ip not in self.peers:
+                    self.peers[ip] = {"type": "server", "protocol": protocol, "name": "Unknown"}
+                    self.dashboard.update_peer("MESH", ip, count=len(self.peers))
+                    self.dashboard.add_log("SYSTEM", f"Node {ip} joined mesh.")
             except Exception as e:
                 logger.error(f"on_server_connect Error: {e}")
         
@@ -129,7 +134,6 @@ class HamperLinkApp:
 
     def on_peer_found(self, info, ip):
         # Tie-breaking rule: Only connect if my IP is "smaller"
-        # This prevents both nodes from calling each other and fighting.
         try:
             my_val = int(ipaddress.ip_address(cfg.ip_address))
             peer_val = int(ipaddress.ip_address(ip))
@@ -138,47 +142,43 @@ class HamperLinkApp:
         except:
             if cfg.ip_address > ip: return
 
-        # Prevent connection storm
-        if self.quic_client:
-            if self.quic_client.connected or getattr(self.quic_client, 'connecting', False):
-                if getattr(self.quic_client, 'target_ip', None) == ip:
-                    return 
+        # Check if already connected or connecting
+        if ip in self.peers or ip in self.connecting_ips:
+            return
             
-        self.peer_info = info
-        self.peer_info['ip'] = ip
-        self.dashboard.update_peer("FOUND", ip, name=info.get('hostname'))
-        self.dashboard.add_debug(f"DISC: Peer {info.get('hostname')} at {ip}")
-        
+        self.dashboard.add_debug(f"DISC: Discovered {ip}")
         # Initiate QUIC Connection
-        asyncio.create_task(self.connect_quic(ip))
+        asyncio.create_task(self.connect_quic(ip, info))
 
-    async def connect_quic(self, ip):
-        self.dashboard.add_debug(f"CLI: Targeting {ip}")
+    async def connect_quic(self, ip, info):
+        self.dashboard.add_debug(f"CLI: Connecting to {ip}")
+        self.connecting_ips.add(ip)
         try:
             client = QuicClient(cfg.CERT_PATH, dashboard=self.dashboard)
-            self.quic_client = client
             
             def on_client_msg(data, _):
-                self.dashboard.add_log("PEER", data)
-                self.lcd.show_msg(ip, data)
+                # Wrapped in try as a precaution
+                try:
+                    self.dashboard.add_log(f"PEER({ip})", data)
+                    self.lcd.show_msg(ip, data)
+                except: pass
             
             def on_connected():
                 try:
-                    self.active_link = client.protocol # Adopt client side for sending
-                    self.dashboard.update_peer("CONNECTED", ip, name=self.peer_info.get('hostname'))
-                    self.dashboard.add_log("SYSTEM", f"Link to {ip} Up!")
-                    self.dashboard.add_debug(f"CLI: Connected to {ip}")
+                    self.peers[ip] = {"type": "client", "protocol": client, "name": info.get('hostname')}
+                    self.dashboard.update_peer("MESH", ip, name=info.get('hostname'), count=len(self.peers))
+                    self.dashboard.add_log("SYSTEM", f"Mesh Link to {ip} Up!")
+                    self.dashboard.add_debug(f"CLI: Linked with {ip}")
                 except Exception as e:
                     logger.error(f"on_connected Error: {e}")
                 
-            self.dashboard.add_log("SYSTEM", f"Connecting to {ip}...")
+            self.dashboard.add_debug(f"CLI: Handshaking {ip}...")
             await client.connect_to(ip, cfg.DEFAULT_PORT, on_client_msg, on_connected)
             
         except Exception as e:
-            self.dashboard.add_debug(f"CLI Task Error: {e}")
-            self.quic_client = None
-            if self.active_link == client.protocol:
-                self.active_link = None
+            self.dashboard.add_debug(f"CLI Fail {ip}: {e}")
+        finally:
+            self.connecting_ips.discard(ip)
 
     async def handle_input(self, msg):
         msg = msg.strip()
@@ -199,22 +199,20 @@ class HamperLinkApp:
 
         self.dashboard.add_log("ME", msg)
         
-        # Determine how to send
-        target = None
-        if self.quic_client and self.quic_client.connected:
-            target = self.quic_client
-        elif self.active_link:
-            target = self.active_link
+        # Broadcast to all peers
+        if not self.peers:
+            self.dashboard.add_log("SYSTEM", "No active links to send to.")
+            return
 
-        if target:
+        for ip, info in list(self.peers.items()):
             try:
-                # Both QuicClient and HampterProtocol (server) should have send_message
+                target = info['protocol']
+                # Both QuicClient and HampterProtocol (server) have send_message
                 target.send_message(msg)
             except Exception as e:
-                self.dashboard.add_debug(f"Send Error: {e}")
-                self.dashboard.add_log("SYSTEM", "Send Failed.")
-        else:
-            self.dashboard.add_log("SYSTEM", "No active link.")
+                self.dashboard.add_debug(f"Send Fail to {ip}: {e}")
+                # Optional: Remove failed peers
+                # del self.peers[ip]
 
     async def tui_loop(self):
         fd = sys.stdin.fileno()

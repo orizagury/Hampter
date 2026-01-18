@@ -18,7 +18,7 @@ class Dashboard:
         self.layout = Layout()
         self.messages = deque(maxlen=20)
         self.debug_log = deque(maxlen=10) # New Debug Log
-        self.peer_data = {"status": "SEARCHING", "ip": "N/A", "ping": "N/A", "name": "N/A"}
+        self.peer_data = {"status": "SEARCHING", "ip": "N/A", "ping": "N/A", "name": "N/A", "count": 0}
         self.my_info = {"iface": "Unknown", "ip": "Unknown"}
         self.input_buffer = ""
         
@@ -38,8 +38,8 @@ class Dashboard:
             Layout(name="debug_log", ratio=1)
         )
 
-    def update_peer(self, status, ip="N/A", ping="N/A", name="N/A"):
-        self.peer_data = {"status": status, "ip": ip, "ping": ping, "name": name}
+    def update_peer(self, status, ip="N/A", ping="N/A", name="N/A", count=0):
+        self.peer_data = {"status": status, "ip": ip, "ping": ping, "name": name, "count": count}
 
     def update_info(self, iface, ip):
         self.my_info = {"iface": iface, "ip": ip}
@@ -80,11 +80,13 @@ class Dashboard:
         status_table.add_column(style="bold cyan")
         status_table.add_column()
         
-        status_color = "green" if self.peer_data["status"] == "CONNECTED" else "red blink"
+        status_color = "green" if self.peer_data["count"] > 0 else "red blink"
+        label = "MESH" if self.peer_data["count"] > 0 else self.peer_data["status"]
         
-        status_table.add_row("STATUS", Text(self.peer_data["status"], style=status_color))
-        status_table.add_row("PEER IP", self.peer_data["ip"])
-        status_table.add_row("PEER ID", self.peer_data["name"])
+        status_table.add_row("STATUS", Text(label, style=status_color))
+        status_table.add_row("NODES", Text(str(self.peer_data["count"]), style="bold cyan"))
+        status_table.add_row("LAST IP", self.peer_data["ip"])
+        status_table.add_row("LAST ID", self.peer_data["name"])
         status_table.add_row("PING", str(self.peer_data["ping"]))
         status_table.add_row(" ", " ")
         status_table.add_row("MY IFACE", self.my_info["iface"])
